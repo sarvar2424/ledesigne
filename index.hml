@@ -1,574 +1,276 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Wallet,
-  Search,
-  Filter,
-  Download,
-  Lock,
-  Unlock,
-  ChevronLeft,
-  ChevronRight,
-  Plus,
-  Trash2,
-  Edit3,
-  Copy,
-  BookmarkPlus,
-  AlertTriangle,
-  ArrowDownCircle,
-  ArrowUpCircle,
-  ArrowRightLeft,
-  DollarSign,
-  PiggyBank,
-  BarChart2,
-  PieChart,
-  CalendarClock,
-  Users,
-  UserPlus,
-  Bell,
-  Check,
-} from "lucide-react";
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Leora Finance — GH Pages Preview</title>
+  <!-- Tailwind (CDN, для прототипов) -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- React 18 + ReactDOM (UMD) -->
+  <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+  <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+  <!-- Babel для JSX в браузере (только для прототипов на GH Pages) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <!-- Lucide (иконки в DOM через data-lucide) -->
+  <script src="https://unpkg.com/lucide@latest"></script>
+  <style>
+    html, body { height: 100%; }
+  </style>
+</head>
+<body class="bg-white text-neutral-900 dark:bg-black dark:text-white">
+  <div id="app"></div>
 
-/**
- * LEORA — FINANCE (Canvas Preview)
- * Premium‑only модуль. Офлайн‑первый UX. Биометрия/маскировка сумм. Экспорт. Бюджеты/Цели/Аналитика/Взаиморасчёты.
- *
- * Включено:
- *  - Хедер с периодом (месяц), поиск/фильтры/экспорт, переключатель маски сумм, Dark/Light
- *  - Карта «Общий баланс» (sparkline), месячный график расходов (сегодня/прогноз/SMA)
- *  - Вкладки: Транзакции · Бюджеты · Цели · Взаиморасчёты · Аналитика
- *  - CRUD‑листы (эмуляция): редактировать/удалить/дублировать/в шаблон
- *  - FAB‑веер: Расход · Доход · Перевод · Долг
- *  - Алерт превышения бюджета, карточка «Необычная транзакция»
- */
+  <script type="text/babel">
+    const { useState, useEffect, useMemo } = React;
 
-// —————————————————————————————————————————
-// УТИЛИТЫ
-// —————————————————————————————————————————
-const clamp = (v: number, min: number, max: number) => Math.min(Math.max(v, min), max);
-const toCurrency = (n: number) => new Intl.NumberFormat("ru-RU", { style: "currency", currency: "RUB", maximumFractionDigits: 0 }).format(n);
-const sum = (arr: number[]) => arr.reduce((a, b) => a + b, 0);
+    // ======================= Утилиты =======================
+    const clamp = (v, min, max) => Math.min(Math.max(v, min), max);
+    const toCurrency = (n) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(n);
+    const sum = (arr) => arr.reduce((a,b)=>a+b,0);
+    const sma = (values, windowSize = 7) => values.map((_,i)=>sum(values.slice(Math.max(0,i-windowSize+1), i+1)) / (i < windowSize ? (i+1) : windowSize));
+    const calcSettlementsTotals = (list) => ({
+      youOwe: list.filter(x=>x.net<0).reduce((a,b)=>a+Math.abs(b.net),0),
+      oweYou: list.filter(x=>x.net>0).reduce((a,b)=>a+b.net,0),
+    });
 
-function sma(values: number[], windowSize = 7) {
-  const out: number[] = [];
-  for (let i = 0; i < values.length; i++) {
-    const start = Math.max(0, i - windowSize + 1);
-    const slice = values.slice(start, i + 1);
-    out.push(sum(slice) / slice.length);
-  }
-  return out;
-}
+    // ======================= Компоненты =======================
+    function Chip({children}) {
+      return <span className="px-3 py-1.5 rounded-full border bg-black/5 dark:bg-white/10 border-black/10 dark:border-white/10 text-sm">{children}</span>;
+    }
 
-// Чистая функция для подсчёта итогов по взаиморасчётам — используем и в UI, и в мини‑тестах
-function calcSettlementsTotals(list: Array<{ net: number }>) {
-  const youOwe = list.filter((s) => s.net < 0).reduce((a, b) => a + Math.abs(b.net), 0);
-  const oweYou = list.filter((s) => s.net > 0).reduce((a, b) => a + b.net, 0);
-  return { youOwe, oweYou };
-}
+    function Sparkline({ points, color = '#0ea5e9' }){
+      const W = 180, H = 48; const max = Math.max(1, ...points);
+      const path = points.map((v,i)=>{
+        const x = (i/(points.length-1))*W; const y = H - (v/max)*(H-4) - 2; return `${i?'L':'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+      }).join(' ');
+      return (
+        <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
+          <path d={path} fill="none" stroke={color} strokeWidth="2" strokeLinejoin="round" strokeLinecap="round" />
+        </svg>
+      );
+    }
 
-// —————————————————————————————————————————
-// КОМПОНЕНТЫ: Sparkline и Месячная диаграмма
-// —————————————————————————————————————————
-function Sparkline({ points, color = "#0ea5e9" }: { points: number[]; color?: string }) {
-  const W = 180, H = 48;
-  const max = Math.max(1, ...points);
-  const path = points
-    .map((v, i) => {
-      const x = (i / (points.length - 1)) * W;
-      const y = H - (v / max) * (H - 4) - 2;
-      return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-    })
-    .join(" ");
-  return (
-    <svg width={W} height={H} viewBox={`0 0 ${W} ${H}`} className="block">
-      <path d={path} fill="none" stroke={color} strokeWidth={2} strokeLinejoin="round" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-function MonthBars({
-  data,
-  todayIndex,
-  showForecast = true,
-}: {
-  data: number[]; // длина = кол-ву дней месяца
-  todayIndex: number; // 0..n-1
-  showForecast?: boolean;
-}) {
-  const H = 100;
-  const max = Math.max(1, ...data);
-  const avg7 = sma(data, 7);
-  return (
-    <div className="relative">
-      <div className="grid grid-cols-31 gap-1 items-end h-[120px]">
-        {data.map((v, i) => {
-          const h = (v / max) * H + 6;
-          const isToday = i === todayIndex;
-          const isFuture = i > todayIndex;
-          return (
-            <div key={i} className="relative flex items-end justify-center">
-              <div
-                className={`w-2.5 rounded-t-md ${isFuture ? "bg-sky-500/30" : "bg-sky-500"}`}
-                style={{ height: `${h}px`, opacity: isFuture && showForecast ? 0.5 : 1 }}
-                title={`${i + 1}: ${toCurrency(v)}`}
-              />
-              {isToday && (
-                <div className="absolute inset-0 border border-white/90 dark:border-white rounded-md pointer-events-none" />
-              )}
-            </div>
-          );
-        })}
-      </div>
-      {/* SMA линия */}
-      <svg className="absolute left-0 right-0 top-0" height={120} width="100%" preserveAspectRatio="none">
-        {(() => {
-          const W = 31 * 10 + 30; // примерно под сетку
-          const Hsvg = 120;
-          const pts = avg7.map((v, i) => {
-            const x = (i / (data.length - 1)) * (W - 10) + 5;
-            const y = Hsvg - (v / max) * (Hsvg - 20) - 10;
-            return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-          });
-          return <path d={pts.join(" ")} fill="none" stroke="rgba(255,255,255,0.9)" strokeWidth={1.8} strokeLinejoin="round" strokeLinecap="round" />;
-        })()}
-      </svg>
-    </div>
-  );
-}
-
-// —————————————————————————————————————————
-// Карточка транзакции
-// —————————————————————————————————————————
-function TxRow({ tx, mask, onEdit, onDelete, onDuplicate, onTemplate }: any) {
-  const amtClass = tx.amount >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-rose-600 dark:text-rose-400";
-  return (
-    <div className="p-3 rounded-xl border bg-white/60 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10 flex items-center justify-between">
-      <div className="flex items-center gap-3">
-        <div className={`w-9 h-9 rounded-xl grid place-items-center ${tx.amount < 0 ? "bg-rose-500/15" : "bg-emerald-500/15"}`}>
-          {tx.amount < 0 ? <ArrowDownCircle size={18} className="text-rose-500" /> : <ArrowUpCircle size={18} className="text-emerald-500" />}
-        </div>
-        <div>
-          <div className="font-semibold text-gray-900 dark:text-white leading-tight">{tx.title}</div>
-          <div className="text-xs text-gray-600 dark:text-gray-300">{tx.category} • {tx.time}</div>
-        </div>
-      </div>
-      <div className="flex items-center gap-2">
-        <div className={`min-w-[86px] text-right font-semibold ${amtClass}`}>{mask ? "••••" : toCurrency(Math.abs(tx.amount))}</div>
-        <button title="Редактировать" onClick={onEdit} className="w-8 h-8 grid place-items-center rounded-lg bg-black/5 dark:bg-white/10"><Edit3 size={16} /></button>
-        <button title="Удалить" onClick={onDelete} className="w-8 h-8 grid place-items-center rounded-lg bg-black/5 dark:bg-white/10"><Trash2 size={16} /></button>
-        <button title="Дублировать" onClick={onDuplicate} className="w-8 h-8 grid place-items-center rounded-lg bg-black/5 dark:bg-white/10"><Copy size={16} /></button>
-        <button title="В шаблон" onClick={onTemplate} className="w-8 h-8 grid place-items-center rounded-lg bg-black/5 dark:bg-white/10"><BookmarkPlus size={16} /></button>
-      </div>
-    </div>
-  );
-}
-
-// —————————————————————————————————————————
-// FAB‑луч
-// —————————————————————————————————————————
-function FabRay({ label, icon, open, order, onClick }: any) {
-  const offset = 64 * order;
-  return (
-    <button
-      title={label}
-      onClick={onClick}
-      className={`absolute right-0 bottom-0 w-12 h-12 grid place-items-center rounded-2xl border bg-white dark:bg-white/10 border-black/10 dark:border-white/15 shadow-lg transition-all duration-200 ${open ? `translate-y-[-${offset}px] opacity-100` : "opacity-0 pointer-events-none"}`}
-    >
-      {icon}
-    </button>
-  );
-}
-
-// —————————————————————————————————————————
-// ГЛАВНЫЙ КОМПОНЕНТ
-// —————————————————————————————————————————
-export default function LeoraFinance() {
-  const [dark, setDark] = useState(true); // Premium: dark-first
-  const rootRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = rootRef.current;
-    if (!el) return;
-    if (dark) el.classList.add("dark");
-    else el.classList.remove("dark");
-  }, [dark]);
-
-  // ПЕРИОД
-  const [period, setPeriod] = useState({ month: 8, year: 2025 }); // август 2025
-  const monthName = useMemo(() => new Date(period.year, period.month - 1, 1).toLocaleDateString("ru-RU", { month: "long", year: "numeric" }), [period]);
-  const daysInMonth = useMemo(() => new Date(period.year, period.month, 0).getDate(), [period]);
-  const todayIdx = new Date().getMonth() + 1 === period.month && new Date().getFullYear() === period.year ? new Date().getDate() - 1 : 14;
-
-  // МОДЕЛИ ДАННЫХ (демо)
-  const [mask, setMask] = useState(false);
-  const [fanOpen, setFanOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<'tx'|'budgets'|'goals'|'analytics'|'settlements'>('tx');
-
-  const txData = useMemo(() => ([
-    { date: "Сегодня", items: [
-      { id: 1, title: "Кофе", category: "Еда и напитки", amount: -280, time: "09:30" },
-      { id: 2, title: "Транспорт", category: "Такси", amount: -460, time: "10:10" },
-      { id: 3, title: "Фриланс", category: "Доход", amount: 12500, time: "12:15" },
-    ]},
-    { date: "Вчера", items: [
-      { id: 4, title: "Супермаркет", category: "Продукты", amount: -2100, time: "19:40" },
-      { id: 5, title: "Подписка", category: "Сервисы", amount: -299, time: "08:05" },
-    ]},
-  ]), []);
-
-  // Бюджеты и цели
-  const budgets = useMemo(() => ([
-    { id: 'food', name: 'Продукты', spent: 12600, limit: 15000 },
-    { id: 'transport', name: 'Транспорт', spent: 7600, limit: 9000 },
-    { id: 'fun', name: 'Развлечения', spent: 9200, limit: 8000 }, // превышение
-  ]), []);
-  const goals = useMemo(() => ([
-    { id: 'vac', name: 'Отпуск в октябре', saved: 82000, target: 120000 },
-    { id: 'mac', name: 'Новый MacBook', saved: 55000, target: 180000 },
-  ]), []);
-
-  // Взаиморасчёты (IOU) — список контактов с чистым сальдо по долгам
-  const settlements = useMemo(() => ([
-    { id: 'anna', name: 'Анна', net: -1200, last: 'Сегодня 10:40' }, // вы должны
-    { id: 'oleg', name: 'Олег', net: 2300, last: 'Вчера 19:10' },   // он должен вам
-    { id: 'maria', name: 'Мария', net: 0, last: '3 дня назад' },
-  ]), []);
-
-  const settlementsTotals = useMemo(() => calcSettlementsTotals(settlements), [settlements]);
-
-  // Месячные траты (демо‑данные)
-  const monthData = useMemo(() => {
-    const n = daysInMonth;
-    const base = Array.from({ length: n }, (_, i) => 2000 + Math.round(Math.sin(i / 3) * 800 + Math.random() * 900));
-    // будущее: чуть выше среднего как прогноз
-    for (let i = todayIdx + 1; i < n; i++) base[i] = base[i] * 1.08;
-    return base;
-  }, [daysInMonth, todayIdx]);
-
-  // Баланс и суммы
-  const expensesToday = useMemo(() => (txData[0]?.items ?? []).filter((t:any) => t.amount < 0).reduce((a:number,b:any)=>a+Math.abs(b.amount),0), [txData]);
-  const incomeToday = useMemo(() => (txData[0]?.items ?? []).filter((t:any) => t.amount > 0).reduce((a:number,b:any)=>a+Math.abs(b.amount),0), [txData]);
-  const balance = 385000; // демо
-
-  // Алерты бюджета (любая категория > 90%)
-  const budgetAlerts = budgets.filter(b => (b.spent / b.limit) > 0.9);
-
-  // Экспорт
-  function doExport(fmt: 'csv'|'pdf'|'xlsx') {
-    toast(`Экспорт ${fmt.toUpperCase()} подготовлен`);
-  }
-
-  // Переход периода
-  function prevMonth(){ setPeriod(p=>{ const d=new Date(p.year,p.month-2,1); return { month: d.getMonth()+1, year: d.getFullYear() }; }); }
-  function nextMonth(){ setPeriod(p=>{ const d=new Date(p.year,p.month,1); return { month: d.getMonth()+1, year: d.getFullYear() }; }); }
-
-  // —————————————————————————————————————————
-  // РЕНДЕР
-  // —————————————————————————————————————————
-  return (
-    <div ref={rootRef} className="min-h-screen bg-white dark:bg-black text-gray-900 dark:text-white">
-      {/* HEADER */}
-      <div className="sticky top-0 z-20 bg-gradient-to-b from-white to-gray-50 dark:from-black dark:to-black/60 backdrop-blur supports-[backdrop-filter]:bg-white/80 dark:supports-[backdrop-filter]:bg-black/60">
-        <div className="flex items-center justify-between px-5 pt-12 pb-5">
+    function TxRow({ tx, mask }){
+      const amtClass = tx.amount>=0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400';
+      return (
+        <div className="p-3 rounded-xl border bg-white/60 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10 flex items-center justify-between">
           <div className="flex items-center gap-3">
-            <div className="w-11 h-11 rounded-xl grid place-items-center shadow-md bg-gradient-to-br from-gray-900 to-gray-700 text-white">
-              <Wallet size={22} />
+            <div className={`w-9 h-9 rounded-xl grid place-items-center ${tx.amount<0?'bg-rose-500/15':'bg-emerald-500/15'}` }>
+              <i data-lucide={tx.amount<0?'arrow-down-circle':'arrow-up-circle'} class="w-4 h-4 text-current"></i>
             </div>
             <div>
-              <h1 className="m-0 text-[26px] font-semibold tracking-tight">Финансы</h1>
-              <p className="m-0 mt-0.5 text-[13px] text-gray-500 dark:text-gray-400">Премиум • офлайн‑первый • синхронизация в реальном времени</p>
+              <div className="font-semibold leading-tight">{tx.title}</div>
+              <div className="text-xs text-gray-600 dark:text-gray-300">{tx.category} • {tx.time}</div>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <button className="w-10 h-10 grid place-items-center rounded-xl bg-black/5 dark:bg-white/10" title="Поиск"><Search size={18} className="text-gray-500 dark:text-gray-400" /></button>
-            <button className="w-10 h-10 grid place-items-center rounded-xl bg-black/5 dark:bg-white/10" title="Фильтры"><Filter size={18} className="text-gray-500 dark:text-gray-400" /></button>
-            <button onClick={() => doExport('csv')} className="w-10 h-10 grid place-items-center rounded-xl bg-black/5 dark:bg-white/10" title="Экспорт CSV"><Download size={18} className="text-gray-500 dark:text-gray-400" /></button>
-            <button onClick={() => setMask(v=>!v)} className="w-10 h-10 grid place-items-center rounded-xl bg-black/5 dark:bg-white/10" title={mask?"Показать суммы":"Скрыть суммы"}>{mask ? <Unlock size={18} className="text-gray-500 dark:text-gray-400"/> : <Lock size={18} className="text-gray-500 dark:text-gray-400"/>}</button>
-            <button onClick={() => setDark(v=>!v)} className="ml-1 px-3 h-10 grid place-items-center rounded-xl border border-black/10 dark:border-white/15 text-xs text-gray-600 dark:text-gray-200">{dark?"🌙 Dark":"🌕 Light"}</button>
-          </div>
+          <div className={`min-w-[86px] text-right font-semibold ${amtClass}`}>{mask?'••••':toCurrency(Math.abs(tx.amount))}</div>
         </div>
-      </div>
+      );
+    }
 
-      {/* PERIOD PICKER + SUMMARY */}
-      <div className="px-5">
-        <div className="flex items-center justify-between mb-3">
-          <div className="flex items-center gap-2">
-            <button onClick={prevMonth} className="w-9 h-9 grid place-items-center rounded-lg bg-black/5 dark:bg-white/10"><ChevronLeft size={18}/></button>
-            <div className="px-3 py-2 rounded-xl border bg-white/60 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10 text-sm font-semibold">{monthName}</div>
-            <button onClick={nextMonth} className="w-9 h-9 grid place-items-center rounded-lg bg-black/5 dark:bg-white/10"><ChevronRight size={18}/></button>
-          </div>
-          <div className="text-xs text-gray-500 dark:text-gray-400">Статус: синхронизировано</div>
-        </div>
+    // ======================= Приложение =======================
+    function App(){
+      const [dark, setDark] = useState(true);
+      useEffect(()=>{ document.documentElement.classList.toggle('dark', dark); }, [dark]);
+      useEffect(()=>{ if (window.lucide) window.lucide.createIcons(); });
 
-        {/* Balance Card */}
-        <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10 mb-4">
-          <div className="flex items-center justify-between">
-            <div>
-              <div className="text-[13px] text-gray-500 dark:text-gray-400">Общий баланс</div>
-              <div className="text-2xl font-semibold">{mask?"•••••••":toCurrency(balance)}</div>
+      const [mask, setMask] = useState(false);
+      const [tab, setTab] = useState('tx');
+
+      const period = { month: new Date().getMonth()+1, year: new Date().getFullYear() };
+      const monthName = new Date(period.year, period.month-1, 1).toLocaleDateString('ru-RU', { month:'long', year:'numeric' });
+
+      const txData = [
+        { date: 'Сегодня', items:[
+          { id:1, title:'Кофе', category:'Еда и напитки', amount:-280, time:'09:30' },
+          { id:2, title:'Фриланс', category:'Доход', amount:12500, time:'12:15' },
+        ]},
+        { date: 'Вчера', items:[ { id:3, title:'Супермаркет', category:'Продукты', amount:-2100, time:'19:40' } ]}
+      ];
+
+      const budgets = [ {name:'Продукты', spent:12600, limit:15000}, {name:'Транспорт', spent:7600, limit:9000} ];
+      const goals = [ {name:'Отпуск в октябре', saved:82000, target:120000} ];
+      const settlements = [ {name:'Анна', net:-1200, last:'Сегодня 10:40'}, {name:'Олег', net:2300, last:'Вчера 19:10'} ];
+      const totals = useMemo(()=>calcSettlementsTotals(settlements), [settlements]);
+
+      const monthData = useMemo(()=>Array.from({length:31},(_,i)=>2000+Math.round(Math.sin(i/3)*800+Math.random()*900)),[]);
+      const expensesToday = txData[0].items.filter(t=>t.amount<0).reduce((a,b)=>a+Math.abs(b.amount),0);
+      const incomeToday = txData[0].items.filter(t=>t.amount>0).reduce((a,b)=>a+Math.abs(b.amount),0);
+      const balance = 385000;
+
+      return (
+        <div className="min-h-screen">
+          {/* HEADER */}
+          <div className="sticky top-0 z-20 bg-gradient-to-b from-white to-gray-50 dark:from-black dark:to-black/60 backdrop-blur">
+            <div className="flex items-center justify-between px-5 pt-8 pb-5">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-xl grid place-items-center shadow-md bg-gradient-to-br from-gray-900 to-gray-700 text-white">
+                  <i data-lucide="wallet" class="w-5 h-5"></i>
+                </div>
+                <div>
+                  <h1 className="m-0 text-[24px] font-semibold tracking-tight">Финансы</h1>
+                  <p className="m-0 mt-0.5 text-[13px] text-gray-500 dark:text-gray-400">Премиум • офлайн‑первый</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-2">
+                <button onClick={()=>setMask(v=>!v)} className="px-3 h-9 grid place-items-center rounded-xl border border-black/10 dark:border-white/15 text-xs text-gray-700 dark:text-gray-200">{mask?'Показать суммы':'Скрыть суммы'}</button>
+                <button onClick={()=>setDark(v=>!v)} className="px-3 h-9 grid place-items-center rounded-xl border border-black/10 dark:border-white/15 text-xs text-gray-700 dark:text-gray-200">{dark?'🌙 Dark':'🌕 Light'}</button>
+              </div>
             </div>
-            <div>
-              <Sparkline points={monthData.slice(0, Math.min(monthData.length, todayIdx+1))} color={dark?"#fff":"#0ea5e9"} />
+          </div>
+
+          {/* PERIOD + SUMMARY */}
+          <div className="px-5">
+            <div className="flex items-center justify-between mb-3">
+              <div className="px-3 py-2 rounded-xl border bg-white/60 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10 text-sm font-semibold">{monthName}</div>
+              <div className="text-xs text-gray-500 dark:text-gray-400">Статус: синхронизировано</div>
             </div>
-          </div>
-          <div className="grid grid-cols-2 gap-3 mt-2">
-            <div className="p-3 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/15">
-              <div className="text-xs text-gray-600 dark:text-gray-300">Доход сегодня</div>
-              <div className="text-[18px] font-semibold text-emerald-600 dark:text-emerald-400">{mask?"••••":toCurrency(incomeToday)}</div>
-            </div>
-            <div className="p-3 rounded-xl bg-rose-500/10 dark:bg-rose-500/15">
-              <div className="text-xs text-gray-600 dark:text-gray-300">Расходы сегодня</div>
-              <div className="text-[18px] font-semibold text-rose-600 dark:text-rose-400">{mask?"••••":toCurrency(expensesToday)}</div>
-            </div>
-          </div>
-        </div>
 
-        {/* Month Bars */}
-        <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10 mb-4">
-          <div className="flex items-center gap-2 mb-2">
-            <BarChart2 size={18} className="text-gray-600 dark:text-gray-300"/>
-            <div className="font-semibold">Расходы за месяц</div>
-            <div className="ml-auto text-xs text-gray-500 dark:text-gray-400 flex items-center gap-2"><span className="inline-block w-3 h-3 bg-sky-500 rounded-sm"/> фактические <span className="inline-block w-3 h-3 bg-sky-500/30 rounded-sm"/> прогноз <span className="inline-block w-4 h-[2px] bg-white/90 rounded"/> SMA 7д</div>
-          </div>
-          <MonthBars data={monthData} todayIndex={todayIdx} showForecast />
-        </div>
-
-        {/* Budget alert */}
-        {budgetAlerts.length>0 && (
-          <div className="p-3 mb-4 rounded-2xl border bg-amber-500/10 dark:bg-amber-500/15 border-amber-300/30 flex items-center gap-3">
-            <AlertTriangle size={18} className="text-amber-500"/>
-            <div className="text-sm">Порог бюджета: {budgetAlerts.map(b=>b.name).join(', ')} — близко к пределу. <button className="underline" onClick={()=>setActiveTab('budgets')}>Посмотреть</button></div>
-          </div>
-        )}
-      </div>
-
-      {/* TABS */}
-      <div className="px-5">
-        <div className="flex items-center gap-2 mb-3">
-          {([
-            { id:'tx', label:'Транзакции' },
-            { id:'budgets', label:'Бюджеты' },
-            { id:'goals', label:'Цели' },
-            { id:'settlements', label:'Взаиморасчёты' },
-            { id:'analytics', label:'Аналитика' },
-          ] as const).map(t => (
-            <button key={t.id}
-              onClick={()=>setActiveTab(t.id)}
-              className={`px-3 py-2 rounded-xl border text-sm ${activeTab===t.id? 'bg-black/80 text-white dark:bg-white/20 dark:text-white border-black/0 dark:border-white/0':'bg-white/70 dark:bg-white/5 border-black/10 dark:border-white/10 text-gray-700 dark:text-gray-200'}`}
-            >{t.label}</button>
-          ))}
-        </div>
-
-        {/* TAB CONTENTS */}
-        {activeTab==='tx' && (
-          <div className="grid gap-4 pb-28">
-            {/* Необычная транзакция */}
-            <div className="p-3 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl grid place-items-center bg-rose-500/15"><AlertTriangle size={18} className="text-rose-500"/></div>
-                <div className="flex-1">
-                  <div className="font-semibold mb-0.5">Необычная транзакция</div>
-                  <div className="text-sm text-gray-600 dark:text-gray-300">Трата в категории «Развлечения» выше среднего на 42%. Проверить и подтвердить?</div>
-                  <div className="mt-2 flex gap-2">
-                    <button onClick={()=>toast('Подтверждено')} className="px-3 py-2 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Подтвердить</button>
-                    <button onClick={()=>toast('Категория изменена')} className="px-3 py-2 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Изменить категорию</button>
-                  </div>
+            {/* Balance Card */}
+            <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10 mb-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[13px] text-gray-500 dark:text-gray-400">Общий баланс</div>
+                  <div className="text-2xl font-semibold">{mask?'•••••••':toCurrency(balance)}</div>
+                </div>
+                <Sparkline points={monthData.slice(0, 20)} color={dark?'#fff':'#0ea5e9'} />
+              </div>
+              <div className="grid grid-cols-2 gap-3 mt-2">
+                <div className="p-3 rounded-xl bg-emerald-500/10 dark:bg-emerald-500/15">
+                  <div className="text-xs text-gray-600 dark:text-gray-300">Доход сегодня</div>
+                  <div className="text-[18px] font-semibold text-emerald-600 dark:text-emerald-400">{mask?'••••':toCurrency(incomeToday)}</div>
+                </div>
+                <div className="p-3 rounded-xl bg-rose-500/10 dark:bg-rose-500/15">
+                  <div className="text-xs text-gray-600 dark:text-gray-300">Расходы сегодня</div>
+                  <div className="text-[18px] font-semibold text-rose-600 dark:text-rose-400">{mask?'••••':toCurrency(expensesToday)}</div>
                 </div>
               </div>
             </div>
-
-            {txData.map((day:any, idx:number)=> (
-              <div key={idx}>
-                <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">{day.date}</div>
-                <div className="grid gap-2">
-                  {day.items.map((t:any)=> (
-                    <TxRow key={t.id} tx={t} mask={mask}
-                      onEdit={()=>toast('Редактирование')}
-                      onDelete={()=>toast('Удалено (UNDO 5с)')}
-                      onDuplicate={()=>toast('Дублировано')}
-                      onTemplate={()=>toast('Сохранено как шаблон')}
-                    />
-                  ))}
-                </div>
-              </div>
-            ))}
-
-            {/* Экспорт */}
-            <div className="flex items-center justify-end gap-2">
-              <button onClick={()=>doExport('csv')} className="px-3 py-2 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Экспорт CSV</button>
-              <button onClick={()=>doExport('pdf')} className="px-3 py-2 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">PDF</button>
-              <button onClick={()=>doExport('xlsx')} className="px-3 py-2 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Excel</button>
-            </div>
           </div>
-        )}
 
-        {activeTab==='budgets' && (
-          <div className="grid gap-3 pb-28">
-            {budgets.map(b=> {
-              const pct = clamp((b.spent / b.limit) * 100, 0, 999);
-              const tone = pct < 60 ? 'bg-emerald-500' : pct < 90 ? 'bg-amber-500' : 'bg-rose-500';
-              return (
-                <div key={b.id} className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="font-semibold">{b.name}</div>
-                    <div className="text-sm text-gray-600 dark:text-gray-300">осталось {mask?"••••":toCurrency(Math.max(0, b.limit - b.spent))}</div>
-                  </div>
-                  <div className="h-3 rounded-xl bg-black/5 dark:bg-white/10 overflow-hidden">
-                    <div className={`h-full ${tone}`} style={{ width: `${Math.min(100,pct)}%` }} />
-                  </div>
-                  <div className="flex items-center justify-between mt-2 text-sm">
-                    <div className="text-gray-600 dark:text-gray-300">{mask?"••••":toCurrency(b.spent)} / {mask?"••••":toCurrency(b.limit)}</div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={()=>toast('Изменить лимит')} className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Изменить лимит</button>
-                      <button onClick={()=>toast('Рекомендация применена')} className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Рекомендация</button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {activeTab==='goals' && (
-          <div className="grid gap-3 pb-28">
-            {goals.map(g=> {
-              const pct = clamp((g.saved / g.target) * 100, 0, 100);
-              return (
-                <div key={g.id} className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
-                  <div className="flex items-center gap-3 mb-2">
-                    <div className="w-10 h-10 rounded-xl grid place-items-center bg-sky-500/15"><PiggyBank size={18} className="text-sky-500"/></div>
-                    <div className="font-semibold">{g.name}</div>
-                  </div>
-                  <div className="h-3 rounded-xl bg-black/5 dark:bg-white/10 overflow-hidden">
-                    <div className="h-full bg-emerald-500" style={{ width: `${pct}%` }} />
-                  </div>
-                  <div className="flex items-center justify-between mt-2 text-sm">
-                    <div className="text-gray-600 dark:text-gray-300">{mask?"•••":toCurrency(g.saved)} / {mask?"•••":toCurrency(g.target)}</div>
-                    <div className="flex items-center gap-2">
-                      <button onClick={()=>toast('Добавлен взнос')} className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">+ Взнос</button>
-                      <button onClick={()=>toast('Оптимальный график предложен')} className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Оптимизировать</button>
-                    </div>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-
-        {activeTab==='settlements' && (
-          <div className="grid gap-3 pb-28">
-            {/* Сводка взаиморасчётов */}
-            <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
-              <div className="flex items-center gap-2 mb-1">
-                <Users size={18} className="text-gray-600 dark:text-gray-300"/>
-                <div className="font-semibold">Взаиморасчёты</div>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <span className="px-3 py-1.5 rounded-full border bg-black/5 dark:bg-white/10 border-black/10 dark:border-white/10 text-sm">
-                  Вы должны <b className="font-semibold">{mask ? '••••' : toCurrency(settlementsTotals.youOwe)}</b>
-                </span>
-                <span className="px-3 py-1.5 rounded-full border bg-black/5 dark:bg-white/10 border-black/10 dark:border-white/10 text-sm">
-                  Вам должны <b className="font-semibold">{mask ? '••••' : toCurrency(settlementsTotals.oweYou)}</b>
-                </span>
-              </div>
+          {/* TABS */}
+          <div className="px-5">
+            <div className="flex items-center gap-2 mb-3">
+              {[
+                ['tx','Транзакции'],
+                ['budgets','Бюджеты'],
+                ['goals','Цели'],
+                ['settlements','Взаиморасчёты'],
+                ['analytics','Аналитика'],
+              ].map(([id,label])=> (
+                <button key={id} onClick={()=>setTab(id)} className={`px-3 py-2 rounded-xl border text-sm ${tab===id? 'bg-black/80 text-white dark:bg-white/20 dark:text-white border-black/0 dark:border-white/0':'bg-white/70 dark:bg-white/5 border-black/10 dark:border-white/10 text-gray-700 dark:text-gray-200'}`}>{label}</button>
+              ))}
             </div>
 
-            {/* Быстрые действия */}
-            <div className="flex justify-end mb-1">
-              <button onClick={()=>toast('Новая запись (долг/возврат)')} className="px-3 py-2 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm inline-flex items-center gap-2"><UserPlus size={16}/> Добавить запись</button>
-            </div>
-
-            {/* Список контактов */}
-            {settlements.map((s:any)=>(
-              <div key={s.id} className="p-3 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl grid place-items-center bg-sky-500/15"><Users size={18} className="text-sky-500"/></div>
-                    <div>
-                      <div className="font-semibold">{s.name}</div>
-                      <div className="text-xs text-gray-600 dark:text-gray-300">{s.last}</div>
-                    </div>
-                  </div>
-                  <div className={`min-w-[110px] text-right font-semibold ${s.net>0 ? 'text-emerald-600 dark:text-emerald-400' : s.net<0 ? 'text-rose-600 dark:text-rose-400' : 'text-gray-500 dark:text-gray-400'}`}>
-                    {mask ? '••••' : (s.net===0 ? '0 ₽' : (s.net>0 ? `+${toCurrency(s.net)}` : `−${toCurrency(Math.abs(s.net))}`))}
-                  </div>
-                </div>
-                <div className="mt-2 flex gap-2">
-                  {s.net>0 && <button onClick={()=>toast('Напоминание отправлено')} className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm inline-flex items-center gap-2"><Bell size={16}/> Напомнить</button>}
-                  {s.net<0 && <button onClick={()=>toast('Погашение долга инициировано')} className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm inline-flex items-center gap-2"><Check size={16}/> Погасить</button>}
-                </div>
-              </div>
-            ))}
-          </div>
-        )}
-
-        {activeTab==='analytics' && (
-          <div className="grid gap-3 pb-28">
-            <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
-              <div className="flex items-center gap-2 mb-2"><PieChart size={18} className="text-gray-600 dark:text-gray-300"/><div className="font-semibold">Структура расходов</div></div>
-              <div className="grid grid-cols-4 gap-3">
-                {[{n:'Продукты',v:34,c:'bg-emerald-500'},{n:'Транспорт',v:22,c:'bg-sky-500'},{n:'Развлечения',v:18,c:'bg-rose-500'},{n:'Сервисы',v:12,c:'bg-amber-500'}].map((x,i)=> (
-                  <div key={i} className="p-3 rounded-xl border bg-white/60 dark:bg-white/5 border-black/10 dark:border-white/10">
-                    <div className="text-sm text-gray-600 dark:text-gray-300">{x.n}</div>
-                    <div className="text-2xl font-semibold">{x.v}%</div>
-                    <div className="h-2 rounded bg-black/5 dark:bg-white/10 mt-2 overflow-hidden"><div className={`h-full ${x.c}`} style={{width:`${x.v}%`}}/></div>
+            {/* CONTENTS */}
+            {tab==='tx' && (
+              <div className="grid gap-4 pb-20">
+                {txData.map((day,i)=> (
+                  <div key={i}>
+                    <div className="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-2">{day.date}</div>
+                    <div className="grid gap-2">{day.items.map(t=> <TxRow key={t.id} tx={t} mask={mask} />)}</div>
                   </div>
                 ))}
               </div>
-            </div>
+            )}
 
-            <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
-              <div className="flex items-center gap-2 mb-2"><CalendarClock size={18} className="text-gray-600 dark:text-gray-300"/><div className="font-semibold">Денежный поток (30 дней)</div></div>
-              <Sparkline points={monthData} color={dark?"#fff":"#111"} />
-            </div>
+            {tab==='budgets' && (
+              <div className="grid gap-3 pb-20">
+                {budgets.map((b,i)=>{
+                  const pct = clamp((b.spent/b.limit)*100, 0, 100);
+                  const tone = pct<60?'bg-emerald-500': pct<90?'bg-amber-500':'bg-rose-500';
+                  return (
+                    <div key={i} className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
+                      <div className="flex items-center justify-between mb-2"><div className="font-semibold">{b.name}</div><div className="text-sm text-gray-600 dark:text-gray-300">осталось {mask?'••••':toCurrency(Math.max(0,b.limit-b.spent))}</div></div>
+                      <div className="h-3 rounded-xl bg-black/5 dark:bg-white/10 overflow-hidden"><div className={`h-full ${tone}`} style={{width:`${pct}%`}}></div></div>
+                      <div className="flex items-center justify-between mt-2 text-sm text-gray-600 dark:text-gray-300">{mask?'••••':toCurrency(b.spent)} / {mask?'••••':toCurrency(b.limit)}<div className="flex gap-2"><button className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Изменить лимит</button><button className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Рекомендация</button></div></div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {tab==='goals' && (
+              <div className="grid gap-3 pb-20">
+                {goals.map((g,i)=>{
+                  const pct = clamp((g.saved/g.target)*100, 0, 100);
+                  return (
+                    <div key={i} className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
+                      <div className="flex items-center gap-2 mb-2"><i data-lucide="piggy-bank" class="w-4 h-4"></i><div className="font-semibold">{g.name}</div></div>
+                      <div className="h-3 rounded-xl bg-black/5 dark:bg-white/10 overflow-hidden"><div className="h-full bg-emerald-500" style={{width:`${pct}%`}}></div></div>
+                      <div className="flex items-center justify-between mt-2 text-sm text-gray-600 dark:text-gray-300">{mask?'•••':toCurrency(g.saved)} / {mask?'•••':toCurrency(g.target)}<div className="flex gap-2"><button className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">+ Взнос</button><button className="px-3 py-1.5 rounded-xl border bg-white dark:bg-transparent/20 border-black/10 dark:border-white/10 text-sm">Оптимизировать</button></div></div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {tab==='settlements' && (
+              <div className="grid gap-3 pb-20">
+                <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
+                  <div className="flex items-center gap-2 mb-1"><i data-lucide="users" class="w-4 h-4"></i><div className="font-semibold">Взаиморасчёты</div></div>
+                  <div className="flex flex-wrap gap-2">
+                    <Chip>Вы должны <b className="font-semibold">{mask?'••••':toCurrency(totals.youOwe)}</b></Chip>
+                    <Chip>Вам должны <b className="font-semibold">{mask?'••••':toCurrency(totals.oweYou)}</b></Chip>
+                  </div>
+                </div>
+                {settlements.map((s,i)=> (
+                  <div key={i} className="p-3 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-3">
+                        <div className="w-9 h-9 rounded-xl grid place-items-center bg-sky-500/15"><i data-lucide="user" class="w-4 h-4 text-sky-500"></i></div>
+                        <div>
+                          <div className="font-semibold">{s.name}</div>
+                          <div className="text-xs text-gray-600 dark:text-gray-300">{s.last}</div>
+                        </div>
+                      </div>
+                      <div className={`min-w-[110px] text-right font-semibold ${s.net>0? 'text-emerald-600 dark:text-emerald-400' : s.net<0? 'text-rose-600 dark:text-rose-400' : 'text-gray-500 dark:text-gray-400'}`}>
+                        {mask?'••••': (s.net===0 ? '0 ₽' : (s.net>0 ? `+${toCurrency(s.net)}` : `−${toCurrency(Math.abs(s.net))}`))}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {tab==='analytics' && (
+              <div className="grid gap-3 pb-20">
+                <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
+                  <div className="flex items-center gap-2 mb-2"><i data-lucide="pie-chart" class="w-4 h-4"></i><div className="font-semibold">Структура расходов</div></div>
+                  <div className="grid grid-cols-4 gap-3">
+                    {[['Продукты',34,'bg-emerald-500'],['Транспорт',22,'bg-sky-500'],['Развлечения',18,'bg-rose-500'],['Сервисы',12,'bg-amber-500']].map(([n,v,c],i)=> (
+                      <div key={i} className="p-3 rounded-xl border bg-white/60 dark:bg-white/5 border-black/10 dark:border-white/10">
+                        <div className="text-sm text-gray-600 dark:text-gray-300">{n}</div>
+                        <div className="text-2xl font-semibold">{v}%</div>
+                        <div className="h-2 rounded bg-black/5 dark:bg-white/10 mt-2 overflow-hidden"><div className={`h-full ${c}`} style={{width:`${v}%`}}></div></div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="p-4 rounded-2xl border bg-white/70 dark:bg-white/5 backdrop-blur-xl border-black/10 dark:border-white/10">
+                  <div className="flex items-center gap-2 mb-2"><i data-lucide="activity" class="w-4 h-4"></i><div className="font-semibold">Денежный поток (30 дней)</div></div>
+                  <Sparkline points={monthData} color={dark?'#fff':'#111'} />
+                </div>
+              </div>
+            )}
           </div>
-        )}
-      </div>
-
-      {/* FAB — веер */}
-      <div className="fixed right-5 bottom-24 z-40">
-        <div className="relative w-14 h-14">
-          <FabRay label="Расход" icon={<ArrowDownCircle size={18}/>} open={fanOpen} order={1} onClick={()=>toast('Добавить расход (AI категория)')} />
-          <FabRay label="Доход" icon={<ArrowUpCircle size={18}/>} open={fanOpen} order={2} onClick={()=>toast('Добавить доход')} />
-          <FabRay label="Перевод" icon={<ArrowRightLeft size={18}/>} open={fanOpen} order={3} onClick={()=>toast('Перевод между счетами')} />
-          <FabRay label="Долг" icon={<DollarSign size={18}/>} open={fanOpen} order={4} onClick={()=>toast('Долг/взаиморасчёт (напоминание)')} />
-          <button onClick={()=>setFanOpen(v=>!v)} aria-label="Add" className="w-14 h-14 rounded-full grid place-items-center text-white shadow-xl border border-white/10 bg-gradient-to-br from-gray-900 to-gray-700"><Plus size={26} /></button>
         </div>
-      </div>
+      );
+    }
 
-      {/* FOOTER GAP */}
-      <div className="h-24"/>
-    </div>
-  );
-}
+    const root = ReactDOM.createRoot(document.getElementById('app'));
+    root.render(<App/>);
 
-// —————————————————————————————————————————
-// TOAST
-// —————————————————————————————————————————
-function toast(text: string) {
-  const el = document.createElement("div");
-  el.textContent = text;
-  el.className = "fixed bottom-40 right-5 bg-gray-900 text-white dark:bg-white dark:text-black px-3.5 py-2.5 rounded-xl shadow-lg text-sm opacity-0 animate-[toastIn_0.2s_ease_forwards] z-[60]";
-  document.body.appendChild(el);
-  setTimeout(() => el.remove(), 1800);
-}
+    // ======================= Мини‑тесты =======================
+    console.assert(clamp(5,0,10)===5, 'clamp within');
+    console.assert(clamp(-1,0,10)===0, 'clamp low');
+    console.assert(clamp(99,0,10)===10, 'clamp high');
+    const smaRes = sma([1,2,3],2); const smaExpected = JSON.stringify([1,1.5,2.5]);
+    console.assert(JSON.stringify(smaRes)===smaExpected, 'sma window=2');
+    const totalsTest = calcSettlementsTotals([{net:-1200},{net:2300},{net:0}]);
+    console.assert(totalsTest.youOwe===1200 && totalsTest.oweYou===2300, 'settlements totals');
+    console.assert(toCurrency(1000).includes('₽'), 'currency RUB symbol');
+  </script>
 
-// —————————————————————————————————————————
-// МИНИ‑ТЕСТЫ (не меняют поведение UI)
-// —————————————————————————————————————————
-(() => {
-  // clamp
-  console.assert(clamp(5, 0, 10) === 5, "clamp: within range");
-  console.assert(clamp(-1, 0, 10) === 0, "clamp: low bound");
-  console.assert(clamp(99, 0, 10) === 10, "clamp: high bound");
-
-  // sma
-  const smaRes = sma([1, 2, 3], 2);
-  const smaExpected = [1, 1.5, 2.5];
-  console.assert(JSON.stringify(smaRes) === JSON.stringify(smaExpected), "sma: window=2");
-
-  // currency
-  console.assert(toCurrency(1000).includes("₽"), "toCurrency: has RUB sign");
-
-  // settlements totals
-  const totals = calcSettlementsTotals([{ net: -1200 }, { net: 2300 }, { net: 0 }]);
-  console.assert(totals.youOwe === 1200 && totals.oweYou === 2300, "calcSettlementsTotals: basic case");
-})();
+</body>
+</html>
